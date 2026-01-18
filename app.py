@@ -1,4 +1,3 @@
-# server/app.py
 from flask import Flask, request, jsonify
 import json
 import os
@@ -6,19 +5,15 @@ import os
 app = Flask(__name__)
 
 KEYS_FILE = "keys.json"
-USED_FILE = "used_keys.json"
 
-def load(path):
-    if not os.path.exists(path):
-        return []
-    with open(path, "r", encoding="utf-8") as f:
-        try:
-            return json.load(f)
-        except Exception:
-            return []
+def load_keys():
+    if not os.path.exists(KEYS_FILE):
+        return {"valid": {}, "used": {}}
+    with open(KEYS_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def save(path, data):
-    with open(path, "w", encoding="utf-8") as f:
+def save_keys(data):
+    with open(KEYS_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 @app.route("/")
@@ -27,52 +22,44 @@ def home():
 
 @app.route("/add_key", methods=["POST"])
 def add_key():
-    data = request.json or {}
-    key = (data.get("key") or "").strip()
+    data = request.json
+    key = data.get("key")
+
     if not key:
-        return jsonify({"status":"error","reason":"empty_key"}), 400
+        return jsonify({"error": "no key"}), 400
 
-    keys = load(KEYS_FILE)
-    if key in keys:
-        # already present
-        return jsonify({"status":"already"}), 200
+    db = load_keys()
 
-    keys.append(key)
-    save(KEYS_FILE, keys)
-    return jsonify({"status":"added"}), 200
+    if key in db["valid"] or key in db["used"]:
+        return jsonify({"status": "already"})
+
+    plan = "ULT1" if key.startswith("ULT1") else \
+           "ULT2" if key.startswith("ULT2") else \
+           "ULT3" if key.startswith("ULT3") else "UNKNOWN"
+
+    db["valid"][key] = plan
+    save_keys(db)
+
+    return jsonify({"status": "added", "plan": plan})
 
 @app.route("/validate", methods=["POST"])
 def validate():
-    data = request.json or {}
-    key = (data.get("key") or "").strip()
-    if not key:
-        return jsonify({"status":"invalid","reason":"empty_key"}), 400
+    data = request.json
+    key = data.get("key")
 
-    keys = load(KEYS_FILE)
-    used = load(USED_FILE)
+    db = load_keys()
 
-    if key in used:
-        return jsonify({"status":"used"}), 200
+    if key in db["used"]:
+        return jsonify({"status": "used"})
 
-    if key not in keys:
-        return jsonify({"status":"invalid"}), 200
+    if key not in db["valid"]:
+        return jsonify({"status": "invalid"})
 
-    # determine plan by prefix
-    up = key.upper()
-    if up.startswith("ULT1-"):
-        plan = "ULT1"
-    elif up.startswith("ULT2-"):
-        plan = "ULT2"
-    elif up.startswith("ULT3-"):
-        plan = "ULT3"
-    else:
-        return jsonify({"status":"invalid"}), 200
+    plan = db["valid"].pop(key)
+    db["used"][key] = plan
+    save_keys(db)
 
-    # mark used
-    used.append(key)
-    save(USED_FILE, used)
-    return jsonify({"status":"ok","plan":plan}), 200
+    return jsonify({"status": "ok", "plan": plan})
 
 if __name__ == "__main__":
-    # local debug
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=10000)
